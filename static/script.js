@@ -26,21 +26,71 @@ $(document).ready(function() {
                 if (response.status === 'success') {
                     $('#loadingIndicator').hide();
                     $('#results').show();
-                    
+
                     // 更新统计数据
                     updateSummaryStats(response.summary_stats);
-                    
-                    // 绘制图表
-                    drawCharts(response.charts);
-                    
+
+                    // 添加数据验证和错误处理
+                    console.log('Response charts data:', response.charts);
+
+                    // 绘制所有图表
+                    if (response.charts) {
+                        try {
+                            // 绘制概率分布图
+                            if (response.charts.probability_dist) {
+                                console.log('Drawing probability chart:', response.charts.probability_dist);
+                                Plotly.newPlot('probabilityChart', response.charts.probability_dist.data, response.charts.probability_dist.layout)
+                                    .then(() => console.log('Probability chart drawn successfully'))
+                                    .catch(err => console.error('Error drawing probability chart:', err));
+                            } else {
+                                console.warn('No probability distribution data available');
+                            }
+                            
+                            // 绘制返奖率分布图
+                            if (response.charts.rtp_dist) {
+                                console.log('Drawing RTP chart:', response.charts.rtp_dist);
+                                Plotly.newPlot('rtpChart', response.charts.rtp_dist.data, response.charts.rtp_dist.layout)
+                                    .then(() => console.log('RTP chart drawn successfully'))
+                                    .catch(err => console.error('Error drawing RTP chart:', err));
+                            } else {
+                                console.warn('No RTP distribution data available');
+                            }
+                            
+                            // 绘制其他图表
+                            if (response.charts.jackpot_trend) {
+                                console.log('Drawing jackpot trend chart:', response.charts.jackpot_trend);
+                                Plotly.newPlot('jackpotTrendChart', response.charts.jackpot_trend.data, response.charts.jackpot_trend.layout)
+                                    .then(() => console.log('Jackpot trend chart drawn successfully'))
+                                    .catch(err => console.error('Error drawing jackpot trend chart:', err));
+                            } else {
+                                console.warn('No jackpot trend data available');
+                            }
+                            
+                            if (response.charts.money_comparison) {
+                                console.log('Drawing money comparison chart:', response.charts.money_comparison);
+                                Plotly.newPlot('moneyComparisonChart', response.charts.money_comparison.data, response.charts.money_comparison.layout)
+                                    .then(() => console.log('Money comparison chart drawn successfully'))
+                                    .catch(err => console.error('Error drawing money comparison chart:', err));
+                            } else {
+                                console.warn('No money comparison data available');
+                            }
+                        } catch (error) {
+                            console.error('Error in chart drawing:', error);
+                            alert('图表绘制过程中发生错误，请查看控制台了解详情');
+                        }
+                    } else {
+                        console.error('No charts data in response');
+                    }
+
                     // 更新奖级统计表格
                     updatePrizeStats(response.tables.prize_stats);
                 } else {
-                    alert('模拟过程中出现错误：' + response.message);
+                    console.error('Response status is not success:', response);
+                    alert('模拟结果获取失败，请查看控制台了解详情');
                 }
             },
             error: function(xhr, status, error) {
-                stopProgressCheck();
+                console.error('AJAX request failed:', {xhr, status, error});
                 $('#loadingIndicator').hide();
                 alert('请求失败：' + error);
             }

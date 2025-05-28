@@ -793,6 +793,10 @@ def simulate():
                 current_time = datetime.now()
                 elapsed = current_time - start_time
                 
+                # 更新头奖历史
+                current_jackpots = progress['stats']['jackpot_hits']
+                progress['jackpot_history'].append(current_jackpots)
+                
                 # 更新基本统计信息
                 progress['current_round'] = end
                 progress['stats'].update({
@@ -911,48 +915,138 @@ def simulate():
         }
         save_interval_stats(final_stats, final_time)
         
-        # 准备返回数据
+        # 计算总投注数
+        total_bets = progress['stats']['total_bets'] / BET_AMOUNT  # 转换为注数
+
+        # 构建图表数据
+        charts_data = {
+            "probability_dist": {
+                "data": [{
+                    "x": ["一等奖", "二等奖", "三等奖", "四等奖"],
+                    "y": [
+                        progress['stats']['prize_counts']['1'] / total_bets,
+                        progress['stats']['prize_counts']['2'] / total_bets,
+                        progress['stats']['prize_counts']['3'] / total_bets,
+                        progress['stats']['prize_counts']['4'] / total_bets
+                    ],
+                    "type": "bar",
+                    "name": "中奖概率"
+                }],
+                "layout": {
+                    "title": "各奖级中奖概率分布",
+                    "xaxis": {"title": "奖级"},
+                    "yaxis": {"title": "概率", "tickformat": ".2%"}
+                }
+            },
+            "rtp_dist": {
+                "data": [{
+                    "x": ["一等奖", "二等奖", "三等奖", "四等奖"],
+                    "y": [
+                        progress['stats']['prize_counts']['1'] * PRIZE_TABLE[1] / progress['stats']['total_bets'] * 100,
+                        progress['stats']['prize_counts']['2'] * PRIZE_TABLE[2] / progress['stats']['total_bets'] * 100,
+                        progress['stats']['prize_counts']['3'] * PRIZE_TABLE[3] / progress['stats']['total_bets'] * 100,
+                        progress['stats']['prize_counts']['4'] * PRIZE_TABLE[4] / progress['stats']['total_bets'] * 100
+                    ],
+                    "type": "bar",
+                    "name": "返奖率",
+                    "text": [
+                        f"{progress['stats']['prize_counts']['1'] * PRIZE_TABLE[1] / progress['stats']['total_bets'] * 100:.1f}%",
+                        f"{progress['stats']['prize_counts']['2'] * PRIZE_TABLE[2] / progress['stats']['total_bets'] * 100:.1f}%",
+                        f"{progress['stats']['prize_counts']['3'] * PRIZE_TABLE[3] / progress['stats']['total_bets'] * 100:.1f}%",
+                        f"{progress['stats']['prize_counts']['4'] * PRIZE_TABLE[4] / progress['stats']['total_bets'] * 100:.1f}%"
+                    ],
+                    "textposition": 'auto'
+                }],
+                "layout": {
+                    "title": "各奖级返奖率分布",
+                    "xaxis": {
+                        "title": "奖级",
+                        "tickangle": 0
+                    },
+                    "yaxis": {
+                        "title": "返奖率",
+                        "tickformat": ".1%",
+                        "range": [0, Math.max(...[
+                            progress['stats']['prize_counts']['1'] * PRIZE_TABLE[1] / progress['stats']['total_bets'] * 100,
+                            progress['stats']['prize_counts']['2'] * PRIZE_TABLE[2] / progress['stats']['total_bets'] * 100,
+                            progress['stats']['prize_counts']['3'] * PRIZE_TABLE[3] / progress['stats']['total_bets'] * 100,
+                            progress['stats']['prize_counts']['4'] * PRIZE_TABLE[4] / progress['stats']['total_bets'] * 100
+                        ]) * 1.1]
+                    },
+                    "margin": {
+                        "l": 80,
+                        "r": 20,
+                        "t": 50,
+                        "b": 50
+                    },
+                    "autosize": true,
+                    "showlegend": false,
+                    "bargap": 0.3
+                }
+            },
+            "jackpot_trend": {
+                "data": [{
+                    "x": list(range(total_rounds + 1)),  # 包含初始0点
+                    "y": progress['jackpot_history'],    # 使用累计历史数据
+                    "type": "line",
+                    "name": "头奖中出累计次数"
+                }],
+                "layout": {
+                    "title": "头奖中出累计趋势",
+                    "xaxis": {"title": "轮次"},
+                    "yaxis": {"title": "累计次数"}
+                }
+            },
+            "money_comparison": {
+                "data": [{
+                    "x": ["投注金额", "派奖金额"],
+                    "y": [progress['stats']['total_bets'], progress['stats']['total_payouts']],
+                    "type": "bar",
+                    "name": "金额对比",
+                    "text": [
+                        f"¥{progress['stats']['total_bets']:,.2f}",
+                        f"¥{progress['stats']['total_payouts']:,.2f}"
+                    ],
+                    "textposition": 'auto',
+                }],
+                "layout": {
+                    "title": "投注与派奖金额对比",
+                    "xaxis": {
+                        "title": "类型",
+                        "tickangle": 0
+                    },
+                    "yaxis": {
+                        "title": "金额（元）",
+                        "tickformat": ",.0f"
+                    },
+                    "margin": {
+                        "l": 80,
+                        "r": 20,
+                        "t": 50,
+                        "b": 50
+                    },
+                    "autosize": true,
+                    "showlegend": false,
+                    "bargap": 0.3
+                }
+            }
+        }
+
+        # 返回最终结果
         return jsonify({
             "status": "success",
+            "message": "模拟完成",
+            "elapsed_time": str(final_time - start_time).split('.')[0],
             "summary_stats": {
                 "total_rounds": total_rounds,
                 "avg_players": progress['stats']['total_players'] / total_rounds,
-                "avg_cards": progress['stats']['total_bets'] / (progress['stats']['total_players'] * BET_AMOUNT),
+                "avg_cards": total_bets / total_rounds,
                 "total_bet_amount": progress['stats']['total_bets'],
                 "total_payout": progress['stats']['total_payouts'],
                 "jackpot_hits": progress['stats']['jackpot_hits'],
                 "average_rtp": progress['stats']['rtp']
             },
-            "charts": {
-                "probability_dist": probability_dist,
-                "rtp_dist": rtp_dist,
-                "jackpot_trend": {
-                    "data": [{
-                        "x": list(range(1, total_rounds + 1)),
-                        "y": [progress['stats']['jackpot_hits']],
-                        "type": "line",
-                        "name": "头奖中出次数"
-                    }],
-                    "layout": {
-                        "title": "头奖中出趋势",
-                        "xaxis": {"title": "轮次"},
-                        "yaxis": {"title": "次数"}
-                    }
-                },
-                "money_comparison": {
-                    "data": [{
-                        "x": ["投注金额", "派奖金额"],
-                        "y": [progress['stats']['total_bets'], progress['stats']['total_payouts']],
-                        "type": "bar",
-                        "name": "金额对比"
-                    }],
-                    "layout": {
-                        "title": "投注与派奖金额对比",
-                        "xaxis": {"title": "类型"},
-                        "yaxis": {"title": "金额（元）"}
-                    }
-                }
-            },
+            "charts": charts_data,
             "tables": {
                 "prize_stats": [
                     {
@@ -960,7 +1054,7 @@ def simulate():
                         "total_winners": progress['stats']['prize_counts'][str(level)],
                         "total_amount": progress['stats']['prize_counts'][str(level)] * PRIZE_TABLE[level],
                         "avg_winners_per_round": progress['stats']['prize_counts'][str(level)] / total_rounds,
-                        "probability": progress['stats']['prize_counts'][str(level)] / progress['stats']['total_bets'],
+                        "probability": progress['stats']['prize_counts'][str(level)] / total_bets,
                         "rtp": progress['stats']['prize_counts'][str(level)] * PRIZE_TABLE[level] / progress['stats']['total_bets'] * 100
                     }
                     for level in range(1, 5)
