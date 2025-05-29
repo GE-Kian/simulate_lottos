@@ -20,6 +20,43 @@ import time
 import csv
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from flask_socketio import SocketIO
+
+def cleanup_memory():
+    """执行内存清理"""
+    gc.collect()
+    return psutil.Process().memory_info().rss / 1024 / 1024  # 返回当前内存使用量（MB）
+
+def get_memory_usage():
+    """获取当前内存使用情况"""
+    return psutil.Process().memory_info().rss / 1024 / 1024  # MB
+
+def validate_batch_results(batch_results):
+    """验证批次结果的完整性"""
+    required_fields = ['total_players', 'total_bets', 'total_payouts', 'prize_counts', 'rounds_data']
+    for field in required_fields:
+        if field not in batch_results:
+            raise ValueError(f"批次结果缺少必要字段: {field}")
+    
+    if not isinstance(batch_results['rounds_data'], list):
+        raise ValueError("rounds_data 必须是列表类型")
+    
+    for round_data in batch_results['rounds_data']:
+        validate_round_data(round_data)
+
+def validate_round_data(round_data):
+    """验证轮次数据的完整性"""
+    required_fields = ['round', 'players', 'bets', 'payouts', 'prizes', 'rtp']
+    for field in required_fields:
+        if field not in round_data:
+            raise ValueError(f"轮次数据缺少必要字段: {field}")
+    
+    if not isinstance(round_data['prizes'], dict):
+        raise ValueError("prizes 必须是字典类型")
+    
+    for level in ['1', '2', '3', '4']:
+        if level not in round_data['prizes']:
+            raise ValueError(f"prizes 缺少奖级: {level}")
 
 # 游戏参数设置
 BET_AMOUNT = 2.0  # 每注金额
@@ -27,12 +64,36 @@ PRIZE_TABLE = {
     1: 5000000.0,  # 一等奖
     2: 100000.0,   # 二等奖
     3: 3000.0,     # 三等奖
-    4: 200.0       # 四等奖
+    4: 100.0       # 四等奖
 }
 
-def generate_winning_numbers():
-    """生成中奖号码（6个不重复的数字，范围1-42）"""
-    return sorted(random.sample(range(1, 43), 6))
+# 其他常量
+MAX_MEMORY_USAGE = 1024  # 最大内存使用量（MB）
+MAX_DETAILED_DATA = 10000  # 最大保存的详细数据条数
+
+# 游戏参数设置
+BET_AMOUNT = 2.0  # 每注金额
+PRIZE_TABLE = {
+    1: 5000000.0,  # 一等奖
+    2: 100000.0,   # 二等奖
+    3: 3000.0,     # 三等奖
+    4: 100.0       # 四等奖
+}
+
+def generate_random_numbers(count, max_num):
+    """生成指定数量的不重复随机数字"""
+    return sorted(random.sample(range(1, max_num + 1), count))
+
+def generate_biased_numbers():
+    """生成偏向于小数字的号码（模拟使用生日等特殊数字的情况）"""
+    numbers = set()
+    while len(numbers) < 6:
+        if random.random() < 0.7:  # 70%概率选择小数字
+            num = random.randint(1, 31)  # 偏向于1-31（月份和日期范围）
+        else:
+            num = random.randint(32, 42)
+        numbers.add(num)
+    return sorted(list(numbers))
 
 def generate_player_numbers():
     """生成玩家投注号码"""
@@ -663,55 +724,117 @@ def run_simulation_batch(batch_rounds):
         current_app.logger.error(f"批次模拟失败: {str(e)}")
         raise
     
-    for round_num in range(batch_rounds):
-        # 生成中奖号码
-        winning_numbers = generate_winning_numbers()
-        
-        # 生成玩家数量
-        num_players = random.randint(490000, 510000)
-        results['total_players'] += num_players
-        
-        # 当前轮次的投注记录
-        round_bets = []
-        
-        # 生成每个玩家的投注
-        for player_id in range(num_players):
-            num_tickets = random.randint(9, 11)
-            bet_amount = num_tickets * 20.0
-            results['total_bets'] += bet_amount
-            
-            # 每个玩家的投注记录
-            player_tickets = []
-            for _ in range(num_tickets):
-                ticket_numbers = generate_ticket_numbers()
-                player_tickets.append(ticket_numbers)
-                
-                # 检查中奖
-                matches = count_matches(ticket_numbers, winning_numbers)
-                for level, info in PRIZE_LEVELS.items():
-                    if matches == info['match']:
-                        results['prize_counts'][level] += 1
-                        results['total_payouts'] += info['prize']
-                        if level == 1:  # 一等奖
-                            results['jackpot_hits'] += 1
-                            results['jackpot_records'].append({
-                                'round': round_num + 1,
-                                'player_id': player_id,
-                                'numbers': ticket_numbers
-                            })
-            
-            # 保存最后一轮的投注记录
-            if round_num == batch_rounds - 1:
-                round_bets.append({
-                    'player_id': player_id,
-                    'num_tickets': num_tickets,
-                    'tickets': player_tickets
-                })
-        
-        if round_num == batch_rounds - 1:
-            results['last_round_bets'] = round_bets
+def simulate_batch(batch_size, total_rounds, current_round):
+    """
+    模拟一批次的彩票游戏
     
-    return results
+    Args:
+        batch_size: 本批次要模拟的轮数
+        total_rounds: 总轮数
+        current_round: 当前轮数
+    
+    Returns:
+        batch_results: 包含本批次模拟结果的字典
+    """
+    print(f"开始批次模拟: batch_size={batch_size}, current_round={current_round}")
+    
+    batch_results = {
+        'total_players': 0,
+        'total_bets': 0.0,
+        'total_payouts': 0.0,
+        'prize_counts': {'1': 0, '2': 0, '3': 0, '4': 0},
+        'rounds_data': []
+    }
+
+    try:
+        for i in range(batch_size):
+            # 生成本轮中奖号码
+            winning_numbers = generate_random_numbers(6, 42)
+            print(f"第 {current_round + i + 1} 轮中奖号码: {winning_numbers}")
+            
+            # 生成随机玩家数量
+            is_weekend = (current_round + i) % 7 >= 5
+            base_players = random.randint(100000, 150000)
+            weekend_multiplier = random.uniform(1.3, 1.5) if is_weekend else 1.0
+            num_players = int(base_players * weekend_multiplier)
+            batch_results['total_players'] += num_players
+            
+            # 初始化本轮数据
+            round_bets = 0.0
+            round_payouts = 0.0
+            round_prizes = {'1': 0, '2': 0, '3': 0, '4': 0}
+            
+            # 模拟每个玩家的投注
+            for _ in range(num_players):
+                # 玩家投注策略
+                if random.random() < 0.8:
+                    num_tickets = random.randint(1, 2)
+                else:
+                    num_tickets = random.randint(3, 10)
+                
+                total_bet = num_tickets * BET_AMOUNT
+                round_bets += total_bet
+                
+                for _ in range(num_tickets):
+                    # 生成玩家选号
+                    player_numbers = generate_biased_numbers() if random.random() < 0.3 else generate_random_numbers(6, 42)
+                    
+                    # 判断中奖情况
+                    matches = len(set(player_numbers) & set(winning_numbers))
+                    
+                    # 确定中奖等级和奖金
+                    if matches == 6:
+                        round_prizes['1'] += 1
+                        round_payouts += PRIZE_TABLE[1]
+                    elif matches == 5:
+                        round_prizes['2'] += 1
+                        round_payouts += PRIZE_TABLE[2]
+                    elif matches == 4:
+                        round_prizes['3'] += 1
+                        round_payouts += PRIZE_TABLE[3]
+                    elif matches == 3:
+                        round_prizes['4'] += 1
+                        round_payouts += PRIZE_TABLE[4]
+            
+            # 更新批次总计
+            batch_results['total_bets'] += round_bets
+            batch_results['total_payouts'] += round_payouts
+            for level in ['1', '2', '3', '4']:
+                batch_results['prize_counts'][level] += round_prizes[level]
+            
+            # 记录本轮详细数据
+            round_data = {
+                'round': current_round + i + 1,
+                'players': num_players,
+                'bets': round_bets,
+                'payouts': round_payouts,
+                'prizes': round_prizes,
+                'rtp': round_payouts / round_bets if round_bets > 0 else 0
+            }
+            
+            # 验证轮次数据
+            try:
+                validate_round_data(round_data)
+                batch_results['rounds_data'].append(round_data)
+                if i % 10 == 0:
+                    print(f"完成第 {current_round + i + 1} 轮模拟: 玩家数={num_players}, 投注={round_bets:.2f}, 派奖={round_payouts:.2f}")
+            except ValueError as e:
+                print(f"轮次数据验证失败: {str(e)}")
+                raise
+        
+        # 验证批次结果
+        try:
+            validate_batch_results(batch_results)
+            print(f"批次模拟完成: 处理了 {batch_size} 轮, 累计玩家 {batch_results['total_players']}")
+            print(f"批次统计: 总投注={batch_results['total_bets']:.2f}, 总派奖={batch_results['total_payouts']:.2f}")
+            return batch_results
+        except ValueError as e:
+            print(f"批次结果验证失败: {str(e)}")
+            raise
+            
+    except Exception as e:
+        print(f"批次模拟出错: {str(e)}")
+        raise
 
 def ensure_stats_dir():
     """确保统计文件目录存在"""
@@ -764,6 +887,8 @@ def simulate():
         progress = {
             'current_round': 0,
             'total_rounds': total_rounds,
+            'jackpot_history': [0],
+            'detailed_data': [],  # 添加这行，用于存储每轮详细数据
             'stats': {
                 'total_players': 0,
                 'total_bets': 0.0,
@@ -789,25 +914,10 @@ def simulate():
                 future = executor.submit(run_simulation_batch, batch_rounds)
                 batch_results = future.result()
                 
-                # 更新进度和统计信息
-                current_time = datetime.now()
-                elapsed = current_time - start_time
-                
-                # 更新头奖历史
-                current_jackpots = progress['stats']['jackpot_hits']
-                progress['jackpot_history'].append(current_jackpots)
-                
-                # 更新基本统计信息
-                progress['current_round'] = end
-                progress['stats'].update({
-                    'total_players': progress['stats']['total_players'] + batch_results['total_players'],
-                    'total_bets': float(progress['stats']['total_bets'] + batch_results['total_bets']),
-                    'total_payouts': float(progress['stats']['total_payouts'] + batch_results['total_payouts']),
-                    'jackpot_hits': progress['stats']['jackpot_hits'] + batch_results['jackpot_hits'],
-                    'elapsed_time': str(elapsed).split('.')[0],
-                    'last_update': current_time.strftime("%Y-%m-%d %H:%M:%S"),
-                    'memory_usage': get_memory_usage()
-                })
+                # 验证和更新进度
+                if not update_progress(progress, batch_results, batch_size, start_time):
+                    print("警告：进度更新失败")
+                    continue
 
                 # 添加概率分布数据
                 total_bets = progress['stats']['total_bets']
@@ -870,12 +980,14 @@ def simulate():
                     )
                 
                 # 每秒保存一次进度
+                current_time = datetime.now()
                 if (current_time - last_progress_save).total_seconds() >= 1:
                     save_progress(progress)
                     last_progress_save = current_time
                 
                 # 每10秒保存一次统计数据
                 if (current_time - last_interval_save).total_seconds() >= 10:
+                    elapsed = current_time - start_time
                     interval_stats = {
                         'timestamp': current_time.strftime("%Y-%m-%d %H:%M:%S"),
                         'elapsed_time': str(elapsed).split('.')[0],
@@ -1059,7 +1171,8 @@ def simulate():
                     }
                     for level in range(1, 5)
                 ]
-            }
+            },
+            "detailed_data": progress['detailed_data']  # 添加详细数据
         })
         
     except Exception as e:

@@ -27,17 +27,20 @@ def index():
 @app.route('/simulate', methods=['POST'])
 def simulate():
     try:
-        # 获取表单数据
-        rounds = int(request.form['rounds'])
+        # 获取JSON数据
+        data = request.json
+        
+        # 设置默认值和参数映射
+        rounds = int(data.get('total_rounds', 1000))
         players = {
-            'min': int(request.form['players_min']),
-            'max': int(request.form['players_max'])
+            'min': int(data.get('min_players', 1000)),
+            'max': int(data.get('max_players', 5000))
         }
         cards = {
-            'min': int(request.form['cards_min']),
-            'max': int(request.form['cards_max'])
+            'min': int(data.get('cards_min', 1)),
+            'max': int(data.get('cards_max', 5))
         }
-        ticket_price = float(request.form['ticket_price'])
+        ticket_price = float(data.get('ticket_price', 2.0))
 
         # 创建模拟器实例
         simulator = LotterySimulator(
